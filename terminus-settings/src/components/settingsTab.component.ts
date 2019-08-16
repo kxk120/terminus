@@ -1,24 +1,24 @@
 import * as yaml from 'js-yaml'
 import * as os from 'os'
 import { Subscription } from 'rxjs'
-import { Component, Inject, Input } from '@angular/core'
-import { HotkeysService } from 'terminus-core'
+import { Component, Inject, Input, HostBinding, NgZone } from '@angular/core'
 import {
     ElectronService,
     DockingService,
     ConfigService,
-    IHotkeyDescription,
-    HotkeyProvider,
+    HotkeyDescription,
+    HotkeysService,
     BaseTabComponent,
     Theme,
     HostAppService,
     Platform,
     HomeBaseService,
-    ShellIntegrationService
+    ShellIntegrationService,
 } from 'terminus-core'
 
 import { SettingsTabProvider } from '../api'
 
+/** @hidden */
 @Component({
     selector: 'settings-tab',
     template: require('./settingsTab.component.pug'),
@@ -30,13 +30,14 @@ import { SettingsTabProvider } from '../api'
 export class SettingsTabComponent extends BaseTabComponent {
     @Input() activeTab: string
     hotkeyFilter = ''
-    hotkeyDescriptions: IHotkeyDescription[]
+    hotkeyDescriptions: HotkeyDescription[]
     screens: any[]
     Platform = Platform
     configDefaults: any
     configFile: string
     isShellIntegrationInstalled = false
     isFluentVibrancySupported = false
+    @HostBinding('class.pad-window-controls') padWindowControls = false
     private configSubscription: Subscription
 
     constructor (
@@ -46,8 +47,8 @@ export class SettingsTabComponent extends BaseTabComponent {
         public hostApp: HostAppService,
         public homeBase: HomeBaseService,
         public shellIntegration: ShellIntegrationService,
+        public zone: NgZone,
         hotkeys: HotkeysService,
-        @Inject(HotkeyProvider) hotkeyProviders: HotkeyProvider[],
         @Inject(SettingsTabProvider) public settingsProviders: SettingsTabProvider[],
         @Inject(Theme) public themes: Theme[],
     ) {
@@ -58,16 +59,29 @@ export class SettingsTabComponent extends BaseTabComponent {
         this.themes = config.enabledServices(this.themes)
 
         this.configDefaults = yaml.safeDump(config.getDefaults())
-        this.configFile = config.readRaw()
-        this.configSubscription = config.changed$.subscribe(() => {
+
+        const onConfigChange = () => {
             this.configFile = config.readRaw()
-        })
+            this.padWindowControls = hostApp.platform === Platform.macOS
+                && config.store.appearance.tabsLocation === 'bottom'
+        }
+
+        this.configSubscription = config.changed$.subscribe(onConfigChange)
+        onConfigChange()
+
+        const onScreenChange = () => {
+            this.zone.run(() => this.screens = this.docking.getScreens())
+        }
+
+        electron.screen.on('display-added', onScreenChange)
+        electron.screen.on('display-removed', onScreenChange)
+        electron.screen.on('display-metrics-changed', onScreenChange)
 
         hotkeys.getHotkeyDescriptions().then(descriptions => {
             this.hotkeyDescriptions = descriptions
         })
 
-        this.isFluentVibrancySupported = process.platform === 'win32'
+        this.isFluentVibrancySupported = hostApp.platform === Platform.Windows
             && parseFloat(os.release()) >= 10
             && parseInt(os.release().split('.')[2]) >= 17063
     }
@@ -76,8 +90,17 @@ export class SettingsTabComponent extends BaseTabComponent {
         this.isShellIntegrationInstalled = await this.shellIntegration.isInstalled()
     }
 
-    getRecoveryToken (): any {
-        return { type: 'app:settings' }
+    async toggleShellIntegration () {
+        if (!this.isShellIntegrationInstalled) {
+            await this.shellIntegration.install()
+        } else {
+            await this.shellIntegration.remove()
+        }
+        this.isShellIntegrationInstalled = await this.shellIntegration.isInstalled()
+    }
+
+    async getRecoveryToken (): Promise<any> {
+        return null
     }
 
     ngOnDestroy () {
@@ -86,14 +109,17 @@ export class SettingsTabComponent extends BaseTabComponent {
     }
 
     restartApp () {
-        this.electron.app.relaunch()
-        this.electron.app.exit()
+        this.hostApp.relaunch()
     }
 
     saveConfigFile () {
         if (this.isConfigFileValid()) {
             this.config.writeRaw(this.configFile)
         }
+    }
+
+    showConfigFile () {
+        this.electron.shell.showItemInFolder(this.config.path)
     }
 
     isConfigFileValid () {
@@ -105,14 +131,9 @@ export class SettingsTabComponent extends BaseTabComponent {
         }
     }
 
-    async installShellIntegration () {
-        await this.shellIntegration.install()
-        this.isShellIntegrationInstalled = true
-    }
-
     getHotkey (id: string) {
         let ptr = this.config.store.hotkeys
-        for (let token of id.split(/\./g)) {
+        for (const token of id.split(/\./g)) {
             ptr = ptr[token]
         }
         return ptr
@@ -121,7 +142,7 @@ export class SettingsTabComponent extends BaseTabComponent {
     setHotkey (id: string, value) {
         let ptr = this.config.store
         let prop = 'hotkeys'
-        for (let token of id.split(/\./g)) {
+        for (const token of id.split(/\./g)) {
             ptr = ptr[prop]
             prop = token
         }

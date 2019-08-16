@@ -1,12 +1,20 @@
-import { Component, Input, HostBinding, HostListener, NgZone, ViewChild, ElementRef } from '@angular/core'
+import { Component, Input, Optional, Inject, HostBinding, HostListener, ViewChild, ElementRef } from '@angular/core'
 import { SortableComponent } from 'ng2-dnd'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
+import { TabContextMenuItemProvider } from '../api/tabContextMenuProvider'
 import { BaseTabComponent } from './baseTab.component'
 import { RenameTabModalComponent } from './renameTabModal.component'
+import { HotkeysService } from '../services/hotkeys.service'
 import { ElectronService } from '../services/electron.service'
 import { AppService } from '../services/app.service'
 import { HostAppService, Platform } from '../services/hostApp.service'
 
+/** @hidden */
+export interface SortableComponentProxy {
+    setDragHandle (_: HTMLElement)
+}
+
+/** @hidden */
 @Component({
     selector: 'tab-header',
     template: require('./tabHeader.component.pug'),
@@ -20,56 +28,23 @@ export class TabHeaderComponent {
     @Input() progress: number
     @ViewChild('handle') handle: ElementRef
 
-    private contextMenu: any
-
-    constructor (
-        zone: NgZone,
-        electron: ElectronService,
+    private constructor (
         public app: AppService,
+        private electron: ElectronService,
         private hostApp: HostAppService,
         private ngbModal: NgbModal,
-        private parentDraggable: SortableComponent,
+        private hotkeys: HotkeysService,
+        @Inject(SortableComponent) private parentDraggable: SortableComponentProxy,
+        @Optional() @Inject(TabContextMenuItemProvider) protected contextMenuProviders: TabContextMenuItemProvider[],
     ) {
-        this.contextMenu = electron.remote.Menu.buildFromTemplate([
-            {
-                label: 'Close',
-                click: () => {
-                    zone.run(() => {
-                        app.closeTab(this.tab, true)
-                    })
+        this.hotkeys.matchedHotkey.subscribe((hotkey) => {
+            if (this.app.activeTab === this.tab) {
+                if (hotkey === 'rename-tab') {
+                    this.showRenameTabModal()
                 }
-            },
-            {
-                label: 'Close other tabs',
-                click: () => {
-                    zone.run(() => {
-                        for (let tab of app.tabs.filter(x => x !== this.tab)) {
-                            app.closeTab(tab, true)
-                        }
-                    })
-                }
-            },
-            {
-                label: 'Close tabs to the right',
-                click: () => {
-                    zone.run(() => {
-                        for (let tab of app.tabs.slice(app.tabs.indexOf(this.tab) + 1)) {
-                            app.closeTab(tab, true)
-                        }
-                    })
-                }
-            },
-            {
-                label: 'Close tabs to the left',
-                click: () => {
-                    zone.run(() => {
-                        for (let tab of app.tabs.slice(0, app.tabs.indexOf(this.tab))) {
-                            app.closeTab(tab, true)
-                        }
-                    })
-                }
-            },
-        ])
+            }
+        })
+        this.contextMenuProviders.sort((a, b) => a.weight - b.weight)
     }
 
     ngOnInit () {
@@ -81,8 +56,8 @@ export class TabHeaderComponent {
         })
     }
 
-    @HostListener('dblclick') onDoubleClick (): void {
-        let modal = this.ngbModal.open(RenameTabModalComponent)
+    showRenameTabModal (): void {
+        const modal = this.ngbModal.open(RenameTabModalComponent)
         modal.componentInstance.value = this.tab.customTitle || this.tab.title
         modal.result.then(result => {
             this.tab.setTitle(result)
@@ -90,17 +65,32 @@ export class TabHeaderComponent {
         }).catch(() => null)
     }
 
-    @HostListener('auxclick', ['$event']) onAuxClick ($event: MouseEvent): void {
+    async buildContextMenu (): Promise<Electron.MenuItemConstructorOptions[]> {
+        let items: Electron.MenuItemConstructorOptions[] = []
+        for (const section of await Promise.all(this.contextMenuProviders.map(x => x.getItems(this.tab, this)))) {
+            items.push({ type: 'separator' })
+            items = items.concat(section)
+        }
+        return items.slice(1)
+    }
+
+    @HostListener('dblclick') onDoubleClick (): void {
+        this.showRenameTabModal()
+    }
+
+    @HostListener('auxclick', ['$event']) async onAuxClick ($event: MouseEvent) {
         if ($event.which === 2) {
             this.app.closeTab(this.tab, true)
         }
         if ($event.which === 3) {
-            this.contextMenu.popup({
+            event.preventDefault()
+
+            const contextMenu = this.electron.remote.Menu.buildFromTemplate(await this.buildContextMenu())
+
+            contextMenu.popup({
                 x: $event.pageX,
                 y: $event.pageY,
-                async: true,
             })
-            event.preventDefault()
         }
     }
 }

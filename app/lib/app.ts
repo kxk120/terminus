@@ -1,6 +1,7 @@
 import { app, ipcMain, Menu, Tray, shell } from 'electron'
+import * as electron from 'electron'
 import { loadConfig } from './config'
-import { Window } from './window'
+import { Window, WindowOptions } from './window'
 
 export class Application {
     private tray: Tray
@@ -18,10 +19,20 @@ export class Application {
         }
 
         app.commandLine.appendSwitch('disable-http-cache')
+        app.commandLine.appendSwitch('lang', 'EN')
+
+        for (const flag of configData.flags || [['force_discrete_gpu', '0']]) {
+            console.log('Setting Electron flag:', flag.join('='))
+            app.commandLine.appendSwitch(flag[0], flag[1])
+        }
     }
 
-    async newWindow (): Promise<Window> {
-        let window = new Window()
+    init () {
+        electron.screen.on('display-metrics-changed', () => this.broadcast('host:display-metrics-changed'))
+    }
+
+    async newWindow (options?: WindowOptions): Promise<Window> {
+        let window = new Window(options)
         this.windows.push(window)
         window.visible$.subscribe(visible => {
             if (visible) {
@@ -47,7 +58,7 @@ export class Application {
         if (!this.hasWindows()) {
             await this.newWindow()
         }
-        this.windows[0].send(event, ...args)
+        this.windows.filter(w => !w.isDestroyed())[0].send(event, ...args)
     }
 
     enableTray () {
@@ -61,7 +72,7 @@ export class Application {
             this.tray = new Tray(`${app.getAppPath()}/assets/tray.png`)
         }
 
-        this.tray.on('click', () => this.focus())
+        this.tray.on('click', () => setTimeout(() => this.focus()));
 
         const contextMenu = Menu.buildFromTemplate([{
             label: 'Show',
@@ -89,7 +100,6 @@ export class Application {
     focus () {
         for (let window of this.windows) {
             window.show()
-            window.focus()
         }
     }
 
@@ -103,7 +113,7 @@ export class Application {
                     {
                         label: 'Preferences',
                         accelerator: 'Cmd+,',
-                        async click () {
+                        click: async () => {
                             if (!this.hasWindows()) {
                                 await this.newWindow()
                             }

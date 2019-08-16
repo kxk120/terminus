@@ -1,14 +1,18 @@
 import { ConfigProvider, Platform } from 'terminus-core'
 
+/** @hidden */
 export class TerminalConfigProvider extends ConfigProvider {
     defaults = {
         hotkeys: {
             shell: {
                 __nonStructural: true,
             },
+            profile: {
+                __nonStructural: true,
+            },
         },
         terminal: {
-            frontend: 'hterm',
+            frontend: 'xterm',
             autoOpen: false,
             fontSize: 14,
             linePadding: 0,
@@ -21,7 +25,9 @@ export class TerminalConfigProvider extends ConfigProvider {
             customShell: '',
             rightClick: 'menu',
             copyOnSelect: false,
+            scrollOnInput: true,
             workingDirectory: '',
+            alwaysUseWorkingDirectory: false,
             altIsMeta: false,
             colorScheme: {
                 __nonStructural: true,
@@ -46,9 +52,12 @@ export class TerminalConfigProvider extends ConfigProvider {
                     '#C792EA',
                     '#89DDFF',
                     '#ffffff',
-                ]
+                ],
             },
-            customColorSchemes: []
+            customColorSchemes: [],
+            environment: {},
+            profiles: [],
+            useConPTY: true,
         },
     }
 
@@ -57,125 +66,129 @@ export class TerminalConfigProvider extends ConfigProvider {
             terminal: {
                 font: 'Menlo',
                 shell: 'default',
-                persistence: 'screen',
+                profile: 'user-default',
             },
             hotkeys: {
                 'ctrl-c': ['Ctrl-C'],
-                'copy': [
+                copy: [
                     '⌘-C',
                 ],
-                'paste': [
+                paste: [
+                    '⌘-V',
                 ],
-                'clear': [
+                clear: [
                     '⌘-K',
                 ],
                 'zoom-in': [
                     '⌘-=',
-                    '⌘-Shift-+',
+                    '⌘-Shift-=',
                 ],
                 'zoom-out': [
                     '⌘--',
-                    '⌘-Shift-_',
+                    '⌘-Shift--',
                 ],
                 'reset-zoom': [
                     '⌘-0',
                 ],
                 'new-tab': [
-                    ['Ctrl-A', 'C'],
-                    ['Ctrl-A', 'Ctrl-C'],
                     '⌘-T',
                     '⌘-N',
                 ],
-                'home': ['⌘-ArrowLeft', 'Home'],
-                'end': ['⌘-ArrowRight', 'End'],
-                'previous-word': ['⌥-ArrowLeft'],
-                'next-word': ['⌥-ArrowRight'],
+                home: ['⌘-Left', 'Home'],
+                end: ['⌘-Right', 'End'],
+                'previous-word': ['⌥-Left'],
+                'next-word': ['⌥-Right'],
                 'delete-previous-word': ['⌥-Backspace'],
                 'delete-next-word': ['⌥-Delete'],
+                search: [
+                    '⌘-F',
+                ],
             },
         },
         [Platform.Windows]: {
             terminal: {
                 font: 'Consolas',
                 shell: 'clink',
-                persistence: null,
+                profile: 'cmd-clink',
                 rightClick: 'paste',
                 copyOnSelect: true,
             },
             hotkeys: {
                 'ctrl-c': ['Ctrl-C'],
-                'copy': [
+                copy: [
                     'Ctrl-Shift-C',
                 ],
-                'paste': [
+                paste: [
                     'Ctrl-Shift-V',
                 ],
-                'clear': [
+                clear: [
                     'Ctrl-L',
                 ],
                 'zoom-in': [
                     'Ctrl-=',
-                    'Ctrl-Shift-+',
+                    'Ctrl-Shift-=',
                 ],
                 'zoom-out': [
                     'Ctrl--',
-                    'Ctrl-Shift-_',
+                    'Ctrl-Shift--',
                 ],
                 'reset-zoom': [
                     'Ctrl-0',
                 ],
                 'new-tab': [
-                    ['Ctrl-A', 'C'],
-                    ['Ctrl-A', 'Ctrl-C'],
                     'Ctrl-Shift-T',
                 ],
-                'home': ['Home'],
-                'end': ['End'],
-                'previous-word': ['Ctrl-ArrowLeft'],
-                'next-word': ['Ctrl-ArrowRight'],
+                home: ['Home'],
+                end: ['End'],
+                'previous-word': ['Ctrl-Left'],
+                'next-word': ['Ctrl-Right'],
                 'delete-previous-word': ['Ctrl-Backspace'],
                 'delete-next-word': ['Ctrl-Delete'],
+                search: [
+                    'Ctrl-Shift-F',
+                ],
             },
         },
         [Platform.Linux]: {
             terminal: {
                 font: 'Liberation Mono',
                 shell: 'default',
-                persistence: 'tmux',
+                profile: 'user-default',
             },
             hotkeys: {
                 'ctrl-c': ['Ctrl-C'],
-                'copy': [
+                copy: [
                     'Ctrl-Shift-C',
                 ],
-                'paste': [
+                paste: [
                     'Ctrl-Shift-V',
                 ],
-                'clear': [
+                clear: [
                     'Ctrl-L',
                 ],
                 'zoom-in': [
                     'Ctrl-=',
-                    'Ctrl-Shift-+',
+                    'Ctrl-Shift-=',
                 ],
                 'zoom-out': [
                     'Ctrl--',
-                    'Ctrl-Shift-_',
+                    'Ctrl-Shift--',
                 ],
                 'reset-zoom': [
                     'Ctrl-0',
                 ],
                 'new-tab': [
-                    ['Ctrl-A', 'C'],
-                    ['Ctrl-A', 'Ctrl-C'],
                     'Ctrl-Shift-T',
                 ],
-                'home': ['Home'],
-                'end': ['End'],
-                'previous-word': ['Ctrl-ArrowLeft'],
-                'next-word': ['Ctrl-ArrowRight'],
+                home: ['Home'],
+                end: ['End'],
+                'previous-word': ['Ctrl-Left'],
+                'next-word': ['Ctrl-Right'],
                 'delete-previous-word': ['Ctrl-Backspace'],
                 'delete-next-word': ['Ctrl-Delete'],
+                search: [
+                    'Ctrl-Shift-F',
+                ],
             },
         },
     }

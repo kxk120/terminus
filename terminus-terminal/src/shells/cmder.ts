@@ -2,8 +2,10 @@ import * as path from 'path'
 import { Injectable } from '@angular/core'
 import { HostAppService, Platform } from 'terminus-core'
 
-import { ShellProvider, IShell } from '../api'
+import { ShellProvider } from '../api/shellProvider'
+import { Shell } from '../api/interfaces'
 
+/** @hidden */
 @Injectable()
 export class CmderShellProvider extends ShellProvider {
     constructor (
@@ -12,7 +14,7 @@ export class CmderShellProvider extends ShellProvider {
         super()
     }
 
-    async provide (): Promise<IShell[]> {
+    async provide (): Promise<Shell[]> {
         if (this.hostApp.platform !== Platform.Windows) {
             return []
         }
@@ -21,17 +23,36 @@ export class CmderShellProvider extends ShellProvider {
             return []
         }
 
-        return [{
-            id: 'cmder',
-            name: 'Cmder',
-            command: 'cmd.exe',
-            args: [
-                '/k',
-                path.join(process.env.CMDER_ROOT, 'vendor', 'init.bat'),
-            ],
-            env: {
-                TERM: 'cygwin',
-            }
-        }]
+        return [
+            {
+                id: 'cmder',
+                name: 'Cmder',
+                command: 'cmd.exe',
+                args: [
+                    '/k',
+                    path.join(process.env.CMDER_ROOT, 'vendor', 'init.bat'),
+                ],
+                icon: require('../icons/cmder.svg'),
+                env: {
+                    TERM: 'cygwin',
+                },
+            },
+            {
+                id: 'cmderps',
+                name: 'Cmder PowerShell',
+                command: 'powershell.exe',
+                args: [
+                    '-ExecutionPolicy',
+                    'Bypass',
+                    '-nologo',
+                    '-noprofile',
+                    '-noexit',
+                    '-command',
+                    `Invoke-Expression '. ''${path.join(process.env.CMDER_ROOT, 'vendor', 'profile.ps1')}'''`,
+                ],
+                icon: require('../icons/cmder-powershell.svg'),
+                env: {},
+            },
+        ]
     }
 }

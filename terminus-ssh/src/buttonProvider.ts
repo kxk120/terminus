@@ -1,18 +1,17 @@
 import { Injectable } from '@angular/core'
-import { DomSanitizer } from '@angular/platform-browser'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
-import { HotkeysService, ToolbarButtonProvider, IToolbarButton } from 'terminus-core'
+import { HotkeysService, ToolbarButtonProvider, ToolbarButton } from 'terminus-core'
 import { SSHModalComponent } from './components/sshModal.component'
 
+/** @hidden */
 @Injectable()
 export class ButtonProvider extends ToolbarButtonProvider {
     constructor (
         private ngbModal: NgbModal,
-        private domSanitizer: DomSanitizer,
         hotkeys: HotkeysService,
     ) {
         super()
-        hotkeys.matchedHotkey.subscribe(async (hotkey) => {
+        hotkeys.matchedHotkey.subscribe(async (hotkey: string) => {
             if (hotkey === 'ssh') {
                 this.activate()
             }
@@ -23,15 +22,15 @@ export class ButtonProvider extends ToolbarButtonProvider {
         this.ngbModal.open(SSHModalComponent)
     }
 
-    provide (): IToolbarButton[] {
+    provide (): ToolbarButton[] {
         return [{
-            icon: this.domSanitizer.bypassSecurityTrustHtml(require('./icons/globe.svg')),
+            icon: require('./icons/globe.svg'),
             weight: 5,
             title: 'SSH connections',
             touchBarNSImage: 'NSTouchBarOpenInBrowserTemplate',
             click: async () => {
                 this.activate()
-            }
+            },
         }]
     }
 }

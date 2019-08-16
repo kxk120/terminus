@@ -1,6 +1,6 @@
 import { Component, Inject, Input, HostListener, HostBinding } from '@angular/core'
 import { trigger, style, animate, transition, state } from '@angular/animations'
-import { DomSanitizer, SafeHtml } from '@angular/platform-browser'
+import { DomSanitizer } from '@angular/platform-browser'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 
 import { ElectronService } from '../services/electron.service'
@@ -9,15 +9,15 @@ import { HotkeysService } from '../services/hotkeys.service'
 import { Logger, LogService } from '../services/log.service'
 import { ConfigService } from '../services/config.service'
 import { DockingService } from '../services/docking.service'
-import { TabRecoveryService } from '../services/tabRecovery.service'
 import { ThemesService } from '../services/themes.service'
-import { UpdaterService, Update } from '../services/updater.service'
+import { UpdaterService } from '../services/updater.service'
 import { TouchbarService } from '../services/touchbar.service'
 
 import { BaseTabComponent } from './baseTab.component'
 import { SafeModeModalComponent } from './safeModeModal.component'
-import { AppService, IToolbarButton, ToolbarButtonProvider } from '../api'
+import { AppService, ToolbarButton, ToolbarButtonProvider } from '../api'
 
+/** @hidden */
 @Component({
     selector: 'app-root',
     template: require('./appRoot.component.pug'),
@@ -26,60 +26,59 @@ import { AppService, IToolbarButton, ToolbarButtonProvider } from '../api'
         trigger('animateTab', [
             state('in', style({
                 'flex-basis': '200px',
-                'width': '200px',
+                width: '200px',
             })),
             transition(':enter', [
                 style({
                     'flex-basis': '1px',
-                    'width': '1px',
+                    width: '1px',
                 }),
                 animate('250ms ease-in-out', style({
                     'flex-basis': '200px',
-                    'width': '200px',
-                }))
+                    width: '200px',
+                })),
             ]),
             transition(':leave', [
                 style({
                     'flex-basis': '200px',
-                    'width': '200px',
+                    width: '200px',
                 }),
                 animate('250ms ease-in-out', style({
                     'flex-basis': '1px',
-                    'width': '1px',
-                }))
-            ])
-        ])
-    ]
+                    width: '1px',
+                })),
+            ]),
+        ]),
+    ],
 })
 export class AppRootComponent {
     Platform = Platform
     @Input() ready = false
-    @Input() leftToolbarButtons: IToolbarButton[]
-    @Input() rightToolbarButtons: IToolbarButton[]
+    @Input() leftToolbarButtons: ToolbarButton[]
+    @Input() rightToolbarButtons: ToolbarButton[]
     @HostBinding('class.platform-win32') platformClassWindows = process.platform === 'win32'
     @HostBinding('class.platform-darwin') platformClassMacOS = process.platform === 'darwin'
     @HostBinding('class.platform-linux') platformClassLinux = process.platform === 'linux'
     @HostBinding('class.no-tabs') noTabs = true
     tabsDragging = false
     unsortedTabs: BaseTabComponent[] = []
-    updateIcon: SafeHtml
+    updateIcon: string
+    updatesAvailable = false
     private logger: Logger
-    private appUpdate: Update
 
-    constructor (
+    private constructor (
         private docking: DockingService,
         private electron: ElectronService,
-        private tabRecovery: TabRecoveryService,
         private hotkeys: HotkeysService,
         private updater: UpdaterService,
         private touchbar: TouchbarService,
         public hostApp: HostAppService,
         public config: ConfigService,
         public app: AppService,
+        private domSanitizer: DomSanitizer,
         @Inject(ToolbarButtonProvider) private toolbarButtonProviders: ToolbarButtonProvider[],
         log: LogService,
         ngbModal: NgbModal,
-        domSanitizer: DomSanitizer,
         _themes: ThemesService,
     ) {
         this.logger = log.create('main')
@@ -88,11 +87,11 @@ export class AppRootComponent {
         this.leftToolbarButtons = this.getToolbarButtons(false)
         this.rightToolbarButtons = this.getToolbarButtons(true)
 
-        this.updateIcon = domSanitizer.bypassSecurityTrustHtml(require('../icons/gift.svg')),
+        this.updateIcon = require('../icons/gift.svg')
 
-        this.hotkeys.matchedHotkey.subscribe((hotkey) => {
+        this.hotkeys.matchedHotkey.subscribe((hotkey: string) => {
             if (hotkey.startsWith('tab-')) {
-                let index = parseInt(hotkey.split('-')[1])
+                const index = parseInt(hotkey.split('-')[1])
                 if (index <= this.app.tabs.length) {
                     this.app.selectTab(this.app.tabs[index - 1])
                 }
@@ -122,18 +121,22 @@ export class AppRootComponent {
         })
 
         this.hostApp.secondInstance$.subscribe(() => {
-            this.onGlobalHotkey()
+            this.presentWindow()
         })
         this.hotkeys.globalHotkey.subscribe(() => {
             this.onGlobalHotkey()
+        })
+
+        this.hostApp.windowCloseRequest$.subscribe(async () => {
+            await this.app.closeAllTabs() && this.hostApp.closeWindow()
         })
 
         if (window['safeModeReason']) {
             ngbModal.open(SafeModeModalComponent)
         }
 
-        this.updater.check().then(update => {
-            this.appUpdate = update
+        this.updater.check().then(available => {
+            this.updatesAvailable = available
         })
 
         this.touchbar.update()
@@ -141,14 +144,19 @@ export class AppRootComponent {
         config.changed$.subscribe(() => this.updateVibrancy())
         this.updateVibrancy()
 
+        let lastProgress = null
         this.app.tabOpened$.subscribe(tab => {
             this.unsortedTabs.push(tab)
             tab.progress$.subscribe(progress => {
+                if (lastProgress === progress) {
+                    return
+                }
                 if (progress !== null) {
                     this.hostApp.getWindow().setProgressBar(progress / 100.0, { mode: 'normal' })
                 } else {
                     this.hostApp.getWindow().setProgressBar(-1, { mode: 'none' })
                 }
+                lastProgress = progress
             })
             this.noTabs = false
         })
@@ -161,35 +169,40 @@ export class AppRootComponent {
 
     onGlobalHotkey () {
         if (this.hostApp.getWindow().isFocused()) {
-            // focused
-            this.electron.loseFocus()
-            this.hostApp.getWindow().blur()
-            if (this.hostApp.platform !== Platform.macOS) {
-                this.hostApp.getWindow().hide()
-            }
+            this.hideWindow()
         } else {
-            if (!this.hostApp.getWindow().isVisible()) {
-                // unfocused, invisible
-                this.hostApp.getWindow().show()
-                this.hostApp.getWindow().focus()
+            this.presentWindow()
+        }
+    }
+
+    presentWindow () {
+        if (!this.hostApp.getWindow().isVisible()) {
+            // unfocused, invisible
+            this.hostApp.getWindow().show()
+            this.hostApp.getWindow().focus()
+        } else {
+            if (this.config.store.appearance.dock === 'off') {
+                // not docked, visible
+                setTimeout(() => {
+                    this.hostApp.getWindow().focus()
+                })
             } else {
-                if (this.config.store.appearance.dock === 'off') {
-                    // not docked, visible
-                    setTimeout(() => {
-                        this.hostApp.getWindow().focus()
-                    })
-                } else {
-                    // docked, visible
-                    this.hostApp.getWindow().hide()
-                }
+                // docked, visible
+                this.hostApp.getWindow().hide()
             }
         }
     }
 
+    hideWindow () {
+        this.electron.loseFocus()
+        this.hostApp.getWindow().blur()
+        if (this.hostApp.platform !== Platform.macOS) {
+            this.hostApp.getWindow().hide()
+        }
+    }
+
     async ngOnInit () {
-        await this.tabRecovery.recoverTabs()
         this.ready = true
-        this.tabRecovery.saveTabs(this.app.tabs)
 
         this.app.emitReady()
     }
@@ -205,7 +218,7 @@ export class AppRootComponent {
     }
 
     updateApp () {
-        this.electron.shell.openExternal(this.appUpdate.url)
+        this.updater.update()
     }
 
     onTabDragStart () {
@@ -219,14 +232,24 @@ export class AppRootComponent {
         })
     }
 
-    private getToolbarButtons (aboveZero: boolean): IToolbarButton[] {
-        let buttons: IToolbarButton[] = []
+    async generateButtonSubmenu (button: ToolbarButton) {
+        if (button.submenu) {
+            button.submenuItems = await button.submenu()
+        }
+    }
+
+    sanitizeIcon (icon: string): any {
+        return this.domSanitizer.bypassSecurityTrustHtml(icon || '')
+    }
+
+    private getToolbarButtons (aboveZero: boolean): ToolbarButton[] {
+        let buttons: ToolbarButton[] = []
         this.config.enabledServices(this.toolbarButtonProviders).forEach(provider => {
             buttons = buttons.concat(provider.provide())
         })
         return buttons
-            .filter((button) => (button.weight > 0) === aboveZero)
-            .sort((a: IToolbarButton, b: IToolbarButton) => (a.weight || 0) - (b.weight || 0))
+            .filter(button => button.weight > 0 === aboveZero)
+            .sort((a: ToolbarButton, b: ToolbarButton) => (a.weight || 0) - (b.weight || 0))
     }
 
     private updateVibrancy () {

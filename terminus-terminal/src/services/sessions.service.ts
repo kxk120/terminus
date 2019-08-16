@@ -1,24 +1,45 @@
-import psNode = require('ps-node')
-let nodePTY
+import * as psNode from 'ps-node'
 import * as fs from 'mz/fs'
+import * as os from 'os'
+import * as nodePTY from 'node-pty'
+
 import { Observable, Subject } from 'rxjs'
 import { first } from 'rxjs/operators'
-import { Injectable, Inject } from '@angular/core'
+import { Injectable } from '@angular/core'
 import { Logger, LogService, ConfigService } from 'terminus-core'
 import { exec } from 'mz/child_process'
+import { SessionOptions } from '../api/interfaces'
+import { WIN_BUILD_CONPTY_SUPPORTED, isWindowsBuild } from '../utils'
 
-import { SessionOptions, SessionPersistenceProvider } from '../api'
+/* eslint-disable block-scoped-var */
 
-export interface IChildProcess {
+try {
+    var macOSNativeProcessList = require('macos-native-processlist')  // eslint-disable-line @typescript-eslint/no-var-requires
+} catch { }
+
+try {
+    var windowsProcessTree = require('windows-process-tree')  // eslint-disable-line @typescript-eslint/no-var-requires
+} catch { }
+
+
+export interface ChildProcess {
     pid: number
     ppid: number
     command: string
 }
 
+const windowsDirectoryRegex = /([a-zA-Z]:[^\:\[\]\?\"\<\>\|]+)/mi
+const catalinaDataVolumePrefix = '/System/Volumes/Data'
+const OSC1337Prefix = '\x1b]1337;'
+const OSC1337Suffix = '\x07'
+
+/**
+ * A session object for a [[BaseTerminalTabComponent]]
+ * Extend this to implement custom I/O and process management for your terminal tab
+ */
 export abstract class BaseSession {
     open: boolean
     name: string
-    recoveryId: string
     truePID: number
     protected output = new Subject<string>()
     protected closed = new Subject<void>()
@@ -44,14 +65,6 @@ export abstract class BaseSession {
         this.initialDataBuffer = null
     }
 
-    abstract start (options: SessionOptions)
-    abstract resize (columns, rows)
-    abstract write (data)
-    abstract kill (signal?: string)
-    abstract async getChildProcesses (): Promise<IChildProcess[]>
-    abstract async gracefullyKillProcess (): Promise<void>
-    abstract async getWorkingDirectory (): Promise<string>
-
     async destroy (): Promise<void> {
         if (this.open) {
             this.open = false
@@ -61,24 +74,40 @@ export abstract class BaseSession {
             await this.gracefullyKillProcess()
         }
     }
+
+    abstract start (options: SessionOptions): void
+    abstract resize (columns: number, rows: number): void
+    abstract write (data: string): void
+    abstract kill (signal?: string): void
+    abstract async getChildProcesses (): Promise<ChildProcess[]>
+    abstract async gracefullyKillProcess (): Promise<void>
+    abstract async getWorkingDirectory (): Promise<string>
 }
 
+/** @hidden */
 export class Session extends BaseSession {
     private pty: any
     private pauseAfterExit = false
+    private guessedCWD: string
+    private reportedCWD: string
+
+    constructor (private config: ConfigService) {
+        super()
+    }
 
     start (options: SessionOptions) {
         this.name = options.name
-        this.recoveryId = options.recoveryId
 
-        let env = {
+        const env = {
             ...process.env,
             TERM: 'xterm-256color',
+            TERM_PROGRAM: 'Terminus',
             ...options.env,
+            ...this.config.store.terminal.environment || {},
         }
 
         if (process.platform === 'darwin' && !process.env.LC_ALL) {
-            let locale = process.env.LC_CTYPE || 'en_US.UTF-8'
+            const locale = process.env.LC_CTYPE || 'en_US.UTF-8'
             Object.assign(env, {
                 LANG: locale,
                 LC_ALL: locale,
@@ -88,30 +117,48 @@ export class Session extends BaseSession {
                 LC_MONETARY: locale,
             })
         }
+
+        let cwd = options.cwd || process.env.HOME
+
+        if (!fs.existsSync(cwd)) {
+            console.warn('Ignoring non-existent CWD:', cwd)
+            cwd = null
+        }
+
         this.pty = nodePTY.spawn(options.command, options.args || [], {
             name: 'xterm-256color',
             cols: options.width || 80,
             rows: options.height || 30,
-            cwd: options.cwd || process.env.HOME,
+            cwd,
             env: env,
+            // `1` instead of `true` forces ConPTY even if unstable
+            experimentalUseConpty: (isWindowsBuild(WIN_BUILD_CONPTY_SUPPORTED) && this.config.store.terminal.useConPTY ? 1 : false) as any,
         })
 
-        if (options.recoveredTruePID$) {
-            options.recoveredTruePID$.subscribe(pid => {
-                this.truePID = pid
-            })
-        } else {
-            this.truePID = (this.pty as any).pid
-        }
+        this.guessedCWD = cwd
+
+        this.truePID = this.pty['pid']
+
+        setTimeout(async () => {
+            // Retrieve any possible single children now that shell has fully started
+            let processes = await this.getChildProcesses()
+            while (processes.length === 1) {
+                this.truePID = processes[0].pid
+                processes = await this.getChildProcesses()
+            }
+        }, 2000)
 
         this.open = true
 
         this.pty.on('data-buffered', data => {
+            data = this.processOSC1337(data)
             this.emitOutput(data)
+            if (process.platform === 'win32') {
+                this.guessWindowsCWD(data)
+            }
         })
 
         this.pty.on('exit', () => {
-            console.log('session exit')
             if (this.pauseAfterExit) {
                 return
             } else if (this.open) {
@@ -120,7 +167,6 @@ export class Session extends BaseSession {
         })
 
         this.pty.on('close', () => {
-            console.log('session close')
             if (this.pauseAfterExit) {
                 this.emitOutput('\r\nPress any key to close\r\n')
             } else if (this.open) {
@@ -129,6 +175,24 @@ export class Session extends BaseSession {
         })
 
         this.pauseAfterExit = options.pauseAfterExit
+    }
+
+    processOSC1337 (data: string) {
+        if (data.includes(OSC1337Prefix)) {
+            const preData = data.substring(0, data.indexOf(OSC1337Prefix))
+            let params = data.substring(data.indexOf(OSC1337Prefix) + OSC1337Prefix.length)
+            const postData = params.substring(params.indexOf(OSC1337Suffix) + OSC1337Suffix.length)
+            params = params.substring(0, params.indexOf(OSC1337Suffix))
+
+            if (params.startsWith('CurrentDir=')) {
+                this.reportedCWD = params.split('=')[1]
+                if (this.reportedCWD.startsWith('~')) {
+                    this.reportedCWD = os.homedir() + this.reportedCWD.substring(1)
+                }
+                data = preData + postData
+            }
+        }
+        return data
     }
 
     resize (columns, rows) {
@@ -151,24 +215,35 @@ export class Session extends BaseSession {
         this.pty.kill(signal)
     }
 
-    async getChildProcesses (): Promise<IChildProcess[]> {
+    async getChildProcesses (): Promise<ChildProcess[]> {
         if (!this.truePID) {
             return []
         }
         if (process.platform === 'darwin') {
-            let processes = await require('macos-native-processlist').getProcessList()
+            const processes = await macOSNativeProcessList.getProcessList()
             return processes.filter(x => x.ppid === this.truePID).map(p => ({
                 pid: p.pid,
                 ppid: p.ppid,
                 command: p.name,
             }))
         }
-        return new Promise<IChildProcess[]>((resolve, reject) => {
+        if (process.platform === 'win32') {
+            return new Promise<ChildProcess[]>(resolve => {
+                windowsProcessTree.getProcessTree(this.truePID, tree => {
+                    resolve(tree ? tree.children.map(child => ({
+                        pid: child.pid,
+                        ppid: tree.pid,
+                        command: child.name,
+                    })) : [])
+                })
+            })
+        }
+        return new Promise<ChildProcess[]>((resolve, reject) => {
             psNode.lookup({ ppid: this.truePID }, (err, processes) => {
                 if (err) {
                     return reject(err)
                 }
-                resolve(processes as IChildProcess[])
+                resolve(processes as ChildProcess[])
             })
         })
     }
@@ -196,77 +271,72 @@ export class Session extends BaseSession {
     }
 
     async getWorkingDirectory (): Promise<string> {
+        if (this.reportedCWD) {
+            return this.reportedCWD
+        }
         if (!this.truePID) {
             return null
         }
         if (process.platform === 'darwin') {
-            let lines = (await exec(`lsof -p ${this.truePID} -Fn`))[0].toString().split('\n')
-            if (lines[1] === 'fcwd') {
-                return lines[2].substring(1)
-            } else {
-                return lines[1].substring(1)
+            let lines: string[]
+            try {
+                lines = (await exec(`lsof -p ${this.truePID} -Fn`))[0].toString().split('\n')
+            } catch (e) {
+                return null
             }
+            let cwd = lines[lines[1] === 'fcwd' ? 2 : 1].substring(1)
+            if (cwd.startsWith(catalinaDataVolumePrefix)) {
+                cwd = cwd.substring(catalinaDataVolumePrefix.length)
+            }
+            return cwd
         }
         if (process.platform === 'linux') {
-            return await fs.readlink(`/proc/${this.truePID}/cwd`)
+            return fs.readlink(`/proc/${this.truePID}/cwd`)
+        }
+        if (process.platform === 'win32') {
+            if (!this.guessedCWD) {
+                return null
+            }
+            try {
+                await fs.access(this.guessedCWD)
+            } catch (e) {
+                return null
+            }
+            return this.guessedCWD
         }
         return null
     }
+
+    private guessWindowsCWD (data: string) {
+        const match = windowsDirectoryRegex.exec(data)
+        if (match) {
+            this.guessedCWD = match[0]
+        }
+    }
 }
 
-@Injectable()
+/** @hidden */
+@Injectable({ providedIn: 'root' })
 export class SessionsService {
     sessions: {[id: string]: BaseSession} = {}
     logger: Logger
     private lastID = 0
 
     constructor (
-        @Inject(SessionPersistenceProvider) private persistenceProviders: SessionPersistenceProvider[],
-        private config: ConfigService,
         log: LogService,
     ) {
-        nodePTY = require('node-pty-tmp')
-        nodePTY = require('../bufferizedPTY')(nodePTY)
+        require('../bufferizedPTY')(nodePTY)
         this.logger = log.create('sessions')
-        this.persistenceProviders = this.config.enabledServices(this.persistenceProviders).filter(x => x.isAvailable())
-    }
-
-    async prepareNewSession (options: SessionOptions): Promise<SessionOptions> {
-        let persistence = this.getPersistence()
-        if (persistence) {
-            let recoveryId = await persistence.startSession(options)
-            options = await persistence.attachSession(recoveryId)
-        }
-        return options
     }
 
     addSession (session: BaseSession, options: SessionOptions) {
         this.lastID++
         options.name = `session-${this.lastID}`
         session.start(options)
-        let persistence = this.getPersistence()
         session.destroyed$.pipe(first()).subscribe(() => {
             delete this.sessions[session.name]
-            if (persistence) {
-                persistence.terminateSession(session.recoveryId)
-            }
         })
         this.sessions[session.name] = session
         return session
-    }
-
-    async recover (recoveryId: string): Promise<SessionOptions> {
-        let persistence = this.getPersistence()
-        if (persistence) {
-            return await persistence.attachSession(recoveryId)
-        }
-        return null
-    }
-
-    private getPersistence (): SessionPersistenceProvider {
-        if (!this.config.store.terminal.persistence) {
-            return null
-        }
-        return this.persistenceProviders.find(x => x.id === this.config.store.terminal.persistence) || null
     }
 }

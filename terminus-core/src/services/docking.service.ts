@@ -3,13 +3,9 @@ import { ConfigService } from '../services/config.service'
 import { ElectronService } from '../services/electron.service'
 import { HostAppService, Bounds } from '../services/hostApp.service'
 
-export interface IScreen {
-    id: string
-    name: string
-}
-
-@Injectable()
+@Injectable({ providedIn: 'root' })
 export class DockingService {
+    /** @hidden */
     constructor (
         private electron: ElectronService,
         private config: ConfigService,
@@ -20,21 +16,24 @@ export class DockingService {
     }
 
     dock () {
-        let display = this.electron.screen.getAllDisplays()
-            .filter((x) => x.id === this.config.store.appearance.dockScreen)[0]
-        if (!display) {
-            display = this.getCurrentScreen()
-        }
-
-        let dockSide = this.config.store.appearance.dock
-        let newBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 }
-        let fill = this.config.store.appearance.dockFill
-        let [minWidth, minHeight] = this.hostApp.getWindow().getMinimumSize()
+        const dockSide = this.config.store.appearance.dock
 
         if (dockSide === 'off') {
             this.hostApp.setAlwaysOnTop(false)
             return
         }
+
+        let display = this.electron.screen.getAllDisplays()
+            .filter(x => x.id === this.config.store.appearance.dockScreen)[0]
+        if (!display) {
+            display = this.getCurrentScreen()
+        }
+
+        const newBounds: Bounds = { x: 0, y: 0, width: 0, height: 0 }
+
+        const fill = this.config.store.appearance.dockFill <= 1 ? this.config.store.appearance.dockFill : 1
+        const [minWidth, minHeight] = this.hostApp.getWindow().getMinimumSize()
+
         if (dockSide === 'left' || dockSide === 'right') {
             newBounds.width = Math.max(minWidth, Math.round(fill * display.bounds.width))
             newBounds.height = display.bounds.height
@@ -65,26 +64,26 @@ export class DockingService {
     }
 
     getScreens () {
-        return this.electron.screen.getAllDisplays().map((display, index) => {
+        const primaryDisplayID = this.electron.screen.getPrimaryDisplay().id
+        return this.electron.screen.getAllDisplays().sort((a, b) =>
+            a.bounds.x === b.bounds.x ? a.bounds.y - b.bounds.y : a.bounds.x - b.bounds.x
+        ).map((display,index) => {
             return {
                 id: display.id,
-                name: {
-                    0: 'Primary display',
-                    1: 'Secondary display',
-                }[index] || `Display ${index + 1}`
+                name: display.id === primaryDisplayID ? 'Primary Display' : `Display ${index +1}`,
             }
         })
     }
 
-    repositionWindow () {
-        let [x, y] = this.hostApp.getWindow().getPosition()
-        for (let screen of this.electron.screen.getAllDisplays()) {
-            let bounds = screen.bounds
+    private repositionWindow () {
+        const [x, y] = this.hostApp.getWindow().getPosition()
+        for (const screen of this.electron.screen.getAllDisplays()) {
+            const bounds = screen.bounds
             if (x >= bounds.x && x <= bounds.x + bounds.width && y >= bounds.y && y <= bounds.y + bounds.height) {
                 return
             }
         }
-        let screen = this.electron.screen.getPrimaryDisplay()
+        const screen = this.electron.screen.getPrimaryDisplay()
         this.hostApp.getWindow().setPosition(screen.bounds.x, screen.bounds.y)
     }
 }

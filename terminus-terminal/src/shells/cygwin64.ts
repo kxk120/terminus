@@ -1,10 +1,17 @@
 import * as path from 'path'
 import { Injectable } from '@angular/core'
-import { Registry } from 'rage-edit-tmp'
 import { HostAppService, Platform } from 'terminus-core'
 
-import { ShellProvider, IShell } from '../api'
+import { ShellProvider } from '../api/shellProvider'
+import { Shell } from '../api/interfaces'
 
+/* eslint-disable block-scoped-var */
+
+try {
+    var wnr = require('windows-native-registry') // eslint-disable-line @typescript-eslint/no-var-requires
+} catch { }
+
+/** @hidden */
 @Injectable()
 export class Cygwin64ShellProvider extends ShellProvider {
     constructor (
@@ -13,12 +20,12 @@ export class Cygwin64ShellProvider extends ShellProvider {
         super()
     }
 
-    async provide (): Promise<IShell[]> {
+    async provide (): Promise<Shell[]> {
         if (this.hostApp.platform !== Platform.Windows) {
             return []
         }
 
-        let cygwinPath = await Registry.get('HKLM\\Software\\Cygwin\\setup', 'rootdir')
+        const cygwinPath = wnr.getRegistryValue(wnr.HK.LM, 'Software\\Cygwin\\setup', 'rootdir')
 
         if (!cygwinPath) {
             return []
@@ -28,9 +35,10 @@ export class Cygwin64ShellProvider extends ShellProvider {
             id: 'cygwin64',
             name: 'Cygwin',
             command: path.join(cygwinPath, 'bin', 'bash.exe'),
+            icon: require('../icons/cygwin.svg'),
             env: {
                 TERM: 'cygwin',
-            }
+            },
         }]
     }
 }

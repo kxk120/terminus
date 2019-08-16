@@ -1,8 +1,15 @@
 import { Injectable } from '@angular/core'
-import { Registry } from 'rage-edit-tmp'
 import { HostAppService, Platform } from 'terminus-core'
-import { ShellProvider, IShell } from '../api'
+import { ShellProvider } from '../api/shellProvider'
+import { Shell } from '../api/interfaces'
 
+/* eslint-disable block-scoped-var */
+
+try {
+    var wnr = require('windows-native-registry') // eslint-disable-line @typescript-eslint/no-var-requires
+} catch { }
+
+/** @hidden */
 @Injectable()
 export class PowerShellCoreShellProvider extends ShellProvider {
     constructor (
@@ -11,12 +18,12 @@ export class PowerShellCoreShellProvider extends ShellProvider {
         super()
     }
 
-    async provide (): Promise<IShell[]> {
+    async provide (): Promise<Shell[]> {
         if (this.hostApp.platform !== Platform.Windows) {
             return []
         }
 
-        let pwshPath = await Registry.get('HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\pwsh.exe', '')
+        const pwshPath = wnr.getRegistryValue(wnr.HK.LM, 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\pwsh.exe', '')
 
         if (!pwshPath) {
             return []
@@ -27,9 +34,10 @@ export class PowerShellCoreShellProvider extends ShellProvider {
             name: 'PowerShell Core',
             command: pwshPath,
             args: ['-nologo'],
+            icon: require('../icons/powershell-core.svg'),
             env: {
                 TERM: 'cygwin',
-            }
+            },
         }]
     }
 }
